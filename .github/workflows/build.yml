@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@main
         with:
           submodules: recursive
       - name: Setup MSBuild
@@ -57,7 +57,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@main
         with:
           submodules: recursive
       - name: Setup MSBuild
@@ -102,7 +102,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository Android
-        uses: actions/checkout@v2
+        uses: actions/checkout@main
         with:
           submodules: recursive
       - name: Setup MSBuild
@@ -151,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@main
         with:
           submodules: recursive
       - name: Install dependencies
