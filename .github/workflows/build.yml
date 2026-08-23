@@ -6,7 +6,7 @@ on:
       - main
       - win-actions
       - linux-actions
-      - forever
+      - foreve
 
 jobs:
   v4-windows:
