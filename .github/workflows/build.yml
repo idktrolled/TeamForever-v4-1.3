@@ -157,7 +157,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential pkg-config libogg-dev libvorbis-dev libtheora-dev libsdl1.2-dev libsdl2-dev libglew-dev
+          sudo apt-get install libogg-dev libvorbis-dev libtheora-dev libsdl1.2-dev libsdl2-dev libglew-dev
           ls ./dependencies/all
       - name: Build RSDKv4
         run: make
