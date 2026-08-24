@@ -343,7 +343,7 @@ void FlipScreen()
         bool cond1 = std::round((Engine.windowXSize / screenxsize) * 24) / 24 == std::floor(Engine.windowXSize / screenxsize);
         bool cond2 = std::round((Engine.windowYSize / screenysize) * 24) / 24 == std::floor(Engine.windowYSize / screenysize);
         if (cond1 || cond2)
-           disableEnhancedScaling = true;
+			disableEnhancedScaling = true;
     }
 
     // get 2x resolution if HQ is enabled.
