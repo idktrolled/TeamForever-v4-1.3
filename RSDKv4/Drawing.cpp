@@ -326,24 +326,11 @@ void FlipScreen()
     SDL_Texture *texTarget = NULL;
 
     switch (Engine.scalingMode) {
-        // reset to default if value is invalid.
-        default: Engine.scalingMode = 0; break;
-        case 0: // nearest
-			integerScaling = false;
-			bilinearScaling = false;
-			break;                         
-        case 1: // integer scaling
-			integerScaling = true;
-			bilinearScaling = false;
-			break;  
-        case 2: // sharp bilinear
-			integerScaling = false;
-			bilinearScaling = false;
-			break;                         
-        case 3: // regular old bilinear
-			integerScaling = false;
-			bilinearScaling = true;
-			break; 
+        default: Engine.scalingMode = RETRO_DEFAULTSCALINGMODE; break;
+        case 0: break;
+        case 1: integerScaling = true; break;
+        case 2: break;
+        case 3: bilinearScaling = true; break;
     }
 
     SDL_GetWindowSize(Engine.window, &Engine.windowXSize, &Engine.windowYSize);
@@ -355,8 +342,8 @@ void FlipScreen()
     if (Engine.scalingMode == 2) {
         bool cond1 = std::round((Engine.windowXSize / screenxsize) * 24) / 24 == std::floor(Engine.windowXSize / screenxsize);
         bool cond2 = std::round((Engine.windowYSize / screenysize) * 24) / 24 == std::floor(Engine.windowYSize / screenysize);
-        //if (cond1 || cond2)
-           //disableEnhancedScaling = true;
+        if (cond1 || cond2)
+           disableEnhancedScaling = true;
     }
 
     // get 2x resolution if HQ is enabled.
