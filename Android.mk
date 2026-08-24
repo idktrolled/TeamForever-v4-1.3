@@ -10,6 +10,8 @@ STBIMG_DIR := dependencies/all/stb-image
 OGG_INCLUDES    := $(LOCAL_PATH)/$(OGG_DIR)/include
 VORBIS_INCLUDES := $(LOCAL_PATH)/$(VORBIS_DIR)/include \
 	                 $(LOCAL_PATH)/$(VORBIS_DIR)/lib
+THEORA_INCLUDES := $(LOCAL_PATH)/$(THEORA_DIR)/include \
+	                 $(LOCAL_PATH)/$(THEORA_DIR)/lib
 
 ######################################################################
 # OGG
@@ -48,6 +50,25 @@ FILTERED := $(filter-out $(LOCAL_PATH)/$(VORBIS_DIR)/lib/psytune.c, $(WILDCARD_S
 
 LOCAL_SRC_FILES := \
 	$(subst jni/src/, , $(FILTERED))
+
+include $(BUILD_STATIC_LIBRARY)
+
+######################################################################
+# THEORA
+include $(CLEAR_VARS)
+
+LOCAL_ARM_MODE := arm
+LOCAL_MODULE   := libtheora
+LOCAL_CFLAGS   := -ffast-math -fsigned-char -O2 -fPIC -DPIC \
+                  -DBYTE_ORDER=LITTLE_ENDIAN -D_ARM_ASSEM_
+
+LOCAL_C_INCLUDES := $(OGG_INCLUDES) $(THEORA_INCLUDES)
+
+WILDCARD_SETUP := \
+  $(wildcard $(LOCAL_PATH)/$(THEORA_DIR)/lib/*.c)
+
+LOCAL_SRC_FILES := \
+	$(subst jni/src/, , $(WILDCARD_SETUP))
 
 include $(BUILD_STATIC_LIBRARY)
 
