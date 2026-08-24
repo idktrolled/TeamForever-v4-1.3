@@ -2,26 +2,17 @@
 #define DRAWING_H
 
 #define SURFACE_COUNT (24)
-#define GFXDATA_SIZE (0x2000 * 0x2000)
+#define GFXDATA_SIZE  (0x800 * 0x800)
 
+#if RETRO_REV03
+#define DRAWLAYER_COUNT (8)
+#else
 #define DRAWLAYER_COUNT (7)
+#endif
 
-//changing DrawFXFlags so they can be merged with binary
-#define FX_FLIP (1)
-#define FX_ROTATE (2)
-#define FX_HSCALE (4)
-#define FX_VSCALE (8)
-#define FX_SCALE (13) //scale applies hscale, vscale AND flip (but only horizontally? TODO perhaps?
-#define FX_ROTOZOOM (15)
-#define FX_INK (16)
-#define FX_ALL (31) //ignore tint - it's unused
-#define FX_TINT (32)
 enum FlipFlags { FLIP_NONE, FLIP_X, FLIP_Y, FLIP_XY };
 enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
-//3D drawing still uses these but I changed the names
-//apparently they can't have numbers in em though. so it says D instead of 3D
-//I've had a stressful day
-enum DrawFXFlags { D_SCALE, D_ROTATE, D_ROTOZOOM, D_INK, D_TINT, D_FLIP };
+enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
 
 struct DrawListEntry {
     int entityRefs[ENTITY_COUNT];
@@ -81,7 +72,6 @@ extern bool mixFiltersOnJekyll;
 extern GLint defaultFramebuffer;
 extern GLuint framebufferHiRes;
 extern GLuint renderbufferHiRes;
-extern GLuint videoBuffer;
 #endif
 
 int InitRenderDevice();
@@ -121,7 +111,6 @@ void Draw3DSkyLayer(int layerID);
 
 // Shape Drawing
 void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A);
-void DrawClassicFade(int XPos, int YPos, int width, int height, int R, int G, int B, int A);
 void SetFadeHQ(int R, int G, int B, int A);
 void DrawTintRectangle(int XPos, int YPos, int width, int height);
 void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
@@ -135,7 +124,7 @@ void DrawSpriteClipped(int XPos, int YPos, int width, int height, int sprX, int 
 void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID);
 void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                       int sheetID);
-#if RETRO_REV00 || RETRO_REV01
+#if !RETRO_REV02
 void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                     int sheetID);
 #endif
@@ -143,8 +132,6 @@ void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY
                        int sheetID);
 void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
                         int sheetID);
-void DrawSpriteAllFX(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
-                        int sheetID, int alpha, int ink, int flags);
 
 void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID);
 void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID);
@@ -158,7 +145,7 @@ void DrawFadedFace(void *v, uint color, uint fogColor, int alpha);
 void DrawTexturedFace(void *v, byte sheetID);
 void DrawTexturedFaceBlended(void *v, byte sheetID);
 
-#if RETRO_REV00 || RETRO_REV01
+#if !RETRO_REV02
 void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount);
 #endif
 
