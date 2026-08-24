@@ -10,12 +10,13 @@ ushort tintLookupTable[0x10000];
 
 bool windowCreated = false;
 
-int SCREEN_XSIZE_CONFIG = 424;
-int SCREEN_XSIZE        = 424;
-int SCREEN_CENTERX      = 424 / 2;
+int CURRENT_DISP_SCREEN = 0;
+int SCREEN_XSIZE_CONFIG = 426;
+int SCREEN_XSIZE        = 426;
+int SCREEN_CENTERX      = 426 / 2;
 
-float SCREEN_XSIZE_F   = 424;
-float SCREEN_CENTERX_F = 424 / 2;
+float SCREEN_XSIZE_F   = 426;
+float SCREEN_CENTERX_F = 426 / 2;
 
 float SCREEN_YSIZE_F   = SCREEN_YSIZE;
 float SCREEN_CENTERY_F = SCREEN_YSIZE / 2;
@@ -39,6 +40,7 @@ bool mixFiltersOnJekyll = false;
 GLint defaultFramebuffer = -1;
 GLuint framebufferHiRes  = -1;
 GLuint renderbufferHiRes = -1;
+GLuint videoBuffer = -1;
 #endif
 
 #if !RETRO_USE_ORIGINAL_CODE
@@ -54,15 +56,10 @@ int InitRenderDevice()
 {
     char gameTitle[0x40];
 
-    sprintf(gameTitle, "%s%s", Engine.gameWindowText, Engine.usingDataFile_Config ? "" : " (Using Data Folder)");
+    sprintf(gameTitle, "%s%s", Engine.gameWindowText, Engine.usingDataFile_Config ? "" : "");
 
 #if !RETRO_USE_ORIGINAL_CODE
 #if RETRO_USING_SDL2
-
-#if RETRO_PLATFORM == RETRO_ANDROID
-    setenv("SDL_AUDIODRIVER", "openslES", 1);   // This is a workaround to eliminate audio delay, since we use SDL 2.28 (as of this commit this is coming from.)
-                                                // This could be resolved by properly updating SDL to 2.32.10, but that'd involve updating a lot of app related files.
-#endif
     SDL_Init(SDL_INIT_EVERYTHING);
 
     SDL_DisableScreenSaver();
@@ -99,10 +96,13 @@ int InitRenderDevice()
     SCREEN_XSIZE = ((float)SCREEN_YSIZE * h / w);
     if (SCREEN_XSIZE % 2)
         ++SCREEN_XSIZE;
+
+    if (SCREEN_XSIZE >= 500)
+        SCREEN_XSIZE = 500;
 #endif
 
     SCREEN_CENTERX = SCREEN_XSIZE / 2;
-    Engine.window  = SDL_CreateWindow(gameTitle, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_XSIZE * Engine.windowScale,
+    Engine.window  = SDL_CreateWindow(gameTitle, SDL_WINDOWPOS_CENTERED_DISPLAY(CURRENT_DISP_SCREEN), SDL_WINDOWPOS_CENTERED_DISPLAY(CURRENT_DISP_SCREEN), SCREEN_XSIZE * Engine.windowScale,
                                      SCREEN_YSIZE * Engine.windowScale, SDL_WINDOW_ALLOW_HIGHDPI | flags);
 
     if (!Engine.window) {
@@ -207,9 +207,12 @@ int InitRenderDevice()
 
     SDL_GL_SetSwapInterval(Engine.vsync ? 1 : 0);
 
-#if RETRO_PLATFORM != RETRO_ANDROID && RETRO_PLATFORM != RETRO_OSX
+#if RETRO_PLATFORM == RETRO_SWITCH
+    // Should probably add error
+    gladLoadGL();
+#elif RETRO_PLATFORM != RETRO_ANDROID && RETRO_PLATFORM != RETRO_OSX
     GLenum err = glewInit();
-    if (err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY) {
+    if (err != GLEW_OK) {
         PrintLog("glew init error:");
         PrintLog((const char *)glewGetErrorString(err));
         return false;
@@ -301,6 +304,7 @@ void FlipScreen()
 {
 #if !RETRO_USE_ORIGINAL_CODE
     float dimAmount = 1.0;
+#if RETRO_PLATFORM != RETRO_SWITCH //switch doesn't need this it's builtin
     if ((!Engine.masterPaused || Engine.frameStep) && !drawStageGFXHQ) {
         if (Engine.dimTimer < Engine.dimLimit) {
             if (Engine.dimPercent < 1.0) {
@@ -315,7 +319,7 @@ void FlipScreen()
 
         dimAmount = Engine.dimMax * Engine.dimPercent;
     }
-
+#endif //! RETRO_PLATFORM != RETRO_SWITCH
 #if RETRO_SOFTWARE_RENDER && !RETRO_USING_OPENGL
 #if RETRO_USING_SDL2
     SDL_Rect destScreenPos_scaled;
@@ -324,10 +328,22 @@ void FlipScreen()
     switch (Engine.scalingMode) {
         // reset to default if value is invalid.
         default: Engine.scalingMode = 0; break;
-        case 0: break;                         // nearest
-        case 1: integerScaling = true; break;  // integer scaling
-        case 2: break;                         // sharp bilinear
-        case 3: bilinearScaling = true; break; // regular old bilinear
+        case 0: // nearest
+			integerScaling = false;
+			bilinearScaling = false;
+			break;                         
+        case 1: // integer scaling
+			integerScaling = true;
+			bilinearScaling = false;
+			break;  
+        case 2: // sharp bilinear
+			integerScaling = false;
+			bilinearScaling = false;
+			break;                         
+        case 3: // regular old bilinear
+			integerScaling = false;
+			bilinearScaling = true;
+			break; 
     }
 
     SDL_GetWindowSize(Engine.window, &Engine.windowXSize, &Engine.windowYSize);
@@ -339,8 +355,8 @@ void FlipScreen()
     if (Engine.scalingMode == 2) {
         bool cond1 = std::round((Engine.windowXSize / screenxsize) * 24) / 24 == std::floor(Engine.windowXSize / screenxsize);
         bool cond2 = std::round((Engine.windowYSize / screenysize) * 24) / 24 == std::floor(Engine.windowYSize / screenysize);
-        if (cond1 || cond2)
-            disableEnhancedScaling = true;
+        //if (cond1 || cond2)
+           //disableEnhancedScaling = true;
     }
 
     // get 2x resolution if HQ is enabled.
@@ -389,58 +405,66 @@ void FlipScreen()
     SDL_RenderClear(Engine.renderer);
 
     ushort *pixels = NULL;
-    if (!drawStageGFXHQ) {
-        SDL_LockTexture(Engine.screenBuffer, NULL, (void **)&pixels, &pitch);
-        ushort *frameBufferPtr = Engine.frameBuffer;
-        for (int y = 0; y < SCREEN_YSIZE; ++y) {
-            memcpy(pixels, frameBufferPtr, SCREEN_XSIZE * sizeof(ushort));
-            frameBufferPtr += GFX_LINESIZE;
-            pixels += pitch / sizeof(ushort);
+    if (Engine.gameMode != ENGINE_VIDEOWAIT) {
+        if (!drawStageGFXHQ) {
+            SDL_LockTexture(Engine.screenBuffer, NULL, (void **)&pixels, &pitch);
+            ushort *frameBufferPtr = Engine.frameBuffer;
+            for (int y = 0; y < SCREEN_YSIZE; ++y) {
+                memcpy(pixels, frameBufferPtr, SCREEN_XSIZE * sizeof(ushort));
+                frameBufferPtr += GFX_LINESIZE;
+                pixels += pitch / sizeof(ushort);
+            }
+            // memcpy(pixels, Engine.frameBuffer, pitch * SCREEN_YSIZE); //faster but produces issues with odd numbered screen sizes
+            SDL_UnlockTexture(Engine.screenBuffer);
+
+            SDL_RenderCopy(Engine.renderer, Engine.screenBuffer, NULL, NULL);
         }
-        // memcpy(pixels, Engine.frameBuffer, pitch * SCREEN_YSIZE); //faster but produces issues with odd numbered screen sizes
-        SDL_UnlockTexture(Engine.screenBuffer);
+        else {
+            int w = 0, h = 0;
+            SDL_QueryTexture(Engine.screenBuffer2x, NULL, NULL, &w, &h);
+            SDL_LockTexture(Engine.screenBuffer2x, NULL, (void **)&pixels, &pitch);
 
-        SDL_RenderCopy(Engine.renderer, Engine.screenBuffer, NULL, NULL);
-    }
-    else {
-        int w = 0, h = 0;
-        SDL_QueryTexture(Engine.screenBuffer2x, NULL, NULL, &w, &h);
-        SDL_LockTexture(Engine.screenBuffer2x, NULL, (void **)&pixels, &pitch);
+            ushort *framebufferPtr = Engine.frameBuffer;
+            for (int y = 0; y < (SCREEN_YSIZE / 2) + 12; ++y) {
+                for (int x = 0; x < GFX_LINESIZE; ++x) {
+                    *pixels = *framebufferPtr;
+                    pixels++;
+                    *pixels = *framebufferPtr;
+                    pixels++;
+                    framebufferPtr++;
+                }
 
-        ushort *framebufferPtr = Engine.frameBuffer;
-        for (int y = 0; y < (SCREEN_YSIZE / 2) + 12; ++y) {
-            for (int x = 0; x < GFX_LINESIZE; ++x) {
-                *pixels = *framebufferPtr;
-                pixels++;
-                *pixels = *framebufferPtr;
-                pixels++;
-                framebufferPtr++;
+                framebufferPtr -= GFX_LINESIZE;
+                for (int x = 0; x < GFX_LINESIZE; ++x) {
+                    *pixels = *framebufferPtr;
+                    pixels++;
+                    *pixels = *framebufferPtr;
+                    pixels++;
+                    framebufferPtr++;
+                }
             }
 
-            framebufferPtr -= GFX_LINESIZE;
-            for (int x = 0; x < GFX_LINESIZE; ++x) {
-                *pixels = *framebufferPtr;
-                pixels++;
-                *pixels = *framebufferPtr;
-                pixels++;
-                framebufferPtr++;
-            }
-        }
+            framebufferPtr = Engine.frameBuffer2x;
+            for (int y = 0; y < ((SCREEN_YSIZE / 2) - 12) * 2; ++y) {
+                for (int x = 0; x < GFX_LINESIZE; ++x) {
+                    *pixels = *framebufferPtr;
+                    framebufferPtr++;
+                    pixels++;
 
-        framebufferPtr = Engine.frameBuffer2x;
-        for (int y = 0; y < ((SCREEN_YSIZE / 2) - 12) * 2; ++y) {
-            for (int x = 0; x < GFX_LINESIZE; ++x) {
-                *pixels = *framebufferPtr;
-                framebufferPtr++;
-                pixels++;
-
-                *pixels = *framebufferPtr;
-                framebufferPtr++;
-                pixels++;
+                    *pixels = *framebufferPtr;
+                    framebufferPtr++;
+                    pixels++;
+                }
             }
+
+            SDL_UnlockTexture(Engine.screenBuffer2x);
+            SDL_RenderCopy(Engine.renderer, Engine.screenBuffer2x, NULL, NULL);
         }
-        SDL_UnlockTexture(Engine.screenBuffer2x);
-        SDL_RenderCopy(Engine.renderer, Engine.screenBuffer2x, NULL, NULL);
+    } else {
+        SDL_RenderCopy(Engine.renderer, Engine.videoBuffer, NULL, NULL);
+        // this is hacky but whatever, it's the easiest way to handle the fadeout
+        SDL_SetRenderDrawColor(Engine.renderer, 0, 0, 0, fadeMode);
+        SDL_RenderFillRect(Engine.renderer, NULL);
     }
 
     if (Engine.scalingMode != 0 && !disableEnhancedScaling) {
@@ -478,36 +502,40 @@ void FlipScreen()
     int w      = SCREEN_XSIZE * Engine.windowScale;
     int h      = SCREEN_YSIZE * Engine.windowScale;
 
-    if (Engine.windowScale == 1) {
-        ushort *frameBufferPtr = Engine.frameBuffer;
-        for (int y = 0; y < SCREEN_YSIZE; ++y) {
-            for (int x = 0; x < SCREEN_XSIZE; ++x) {
-                pixels[x] = frameBufferPtr[x];
+    if (Engine.gameMode != ENGINE_VIDEOWAIT) {
+        if (Engine.windowScale == 1) {
+            ushort *frameBufferPtr = Engine.frameBuffer;
+            for (int y = 0; y < SCREEN_YSIZE; ++y) {
+                for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                    pixels[x] = frameBufferPtr[x];
+                }
+                frameBufferPtr += GFX_LINESIZE;
+                px += Engine.screenBuffer->pitch / sizeof(ushort);
             }
-            frameBufferPtr += GFX_LINESIZE;
-            px += Engine.screenBuffer->pitch / sizeof(ushort);
+            // memcpy(Engine.screenBuffer->pixels, Engine.frameBuffer, Engine.screenBuffer->pitch * SCREEN_YSIZE);
         }
-        // memcpy(Engine.screenBuffer->pixels, Engine.frameBuffer, Engine.screenBuffer->pitch * SCREEN_YSIZE);
-    }
-    else {
-        // TODO: this better, I really dont know how to use SDL1.2 well lol
-        int dx = 0, dy = 0;
-        do {
+        else {
+            // TODO: this better, I really dont know how to use SDL1.2 well lol
+            int dx = 0, dy = 0;
             do {
-                int x = (int)(dx * (1.0f / Engine.windowScale));
-                int y = (int)(dy * (1.0f / Engine.windowScale));
+                do {
+                    int x = (int)(dx * (1.0f / Engine.windowScale));
+                    int y = (int)(dy * (1.0f / Engine.windowScale));
 
-                px[dx + (dy * w)] = Engine.frameBuffer[x + (y * GFX_LINESIZE)];
+                    px[dx + (dy * w)] = Engine.frameBuffer[x + (y * GFX_LINESIZE)];
 
-                dx++;
-            } while (dx < w);
-            dy++;
-            dx = 0;
-        } while (dy < h);
+                    dx++;
+                } while (dx < w);
+                dy++;
+                dx = 0;
+            } while (dy < h);
+        }
+
+        // Apply image to screen
+        SDL_BlitSurface(Engine.screenBuffer, NULL, Engine.windowSurface, NULL);
+    } else {
+        SDL_BlitSurface(Engine.videoBuffer, NULL, Engine.windowSurface, NULL);
     }
-
-    // Apply image to screen
-    SDL_BlitSurface(Engine.screenBuffer, NULL, Engine.windowSurface, NULL);
 
     // Update Screen
     SDL_Flip(Engine.windowSurface);
@@ -519,10 +547,12 @@ void FlipScreen()
 }
 void ReleaseRenderDevice(bool refresh)
 {
-    if (!refresh) {
-        ClearMeshData();
-        ClearTextures(false);
-    }
+	if (!refresh) {
+		ClearMeshData();
+		ClearTextures(false);
+	}
+	else
+		CURRENT_DISP_SCREEN = SDL_GetWindowDisplayIndex(Engine.window);
 
 #if !RETRO_USE_ORIGINAL_CODE
 #if RETRO_SOFTWARE_RENDER
@@ -558,6 +588,7 @@ void ReleaseRenderDevice(bool refresh)
 
 void GenerateBlendLookupTable(void)
 {
+	//this is still used by DrawFace, DrawFadedFace, DrawRectangle, and SetHQFade
     for (int y = 0; y < 0x100; y++) {
         for (int x = 0; x < 0x20; x++) {
             blendLookupTable[x + (0x20 * y)]    = y * x >> 8;
@@ -606,11 +637,7 @@ void SetScreenDimensions(int width, int height)
     int displayWidth        = aspect * SCREEN_YSIZE;
     // if (val > displaySettings.maxWidth)
     //    val = displaySettings.maxWidth;
-#if !RETRO_USE_ORIGINAL_CODE
     SetScreenSize(displayWidth, (displayWidth + 9) & -0x8);
-#else
-    SetScreenSize(displayWidth, (displayWidth + 9) & -0x10);
-#endif
 
     int width2 = 0;
     int wBuf   = GFX_LINESIZE - 1;
@@ -752,11 +779,7 @@ void SetupViewport()
     glViewport(displaySettings.offsetX, 0, displaySettings.width, displaySettings.height);
 #endif
     int displayWidth = aspect * SCREEN_YSIZE;
-#if !RETRO_USE_ORIGINAL_CODE
     SetScreenSize(displayWidth, (displayWidth + 9) & -0x8);
-#else
-    SetScreenSize(displayWidth, (displayWidth + 9) & -0x10);
-#endif
 
     Engine.useHighResAssets = displaySettings.height > (SCREEN_YSIZE * 2);
 
@@ -1231,13 +1254,6 @@ void DrawStageGFX()
         }
 
         DrawObjectList(5);
-#if RETRO_REV03
-#if !RETRO_USE_ORIGINAL_CODE
-        // Hacky fix for Tails Object not working properly in special stages on non-Origins bytecode
-        if (forceUseScripts || Engine.usingOrigins)
-#endif
-            DrawObjectList(7);
-#endif
         DrawObjectList(6);
     }
 
@@ -1250,14 +1266,28 @@ void DrawStageGFX()
     if (drawStageGFXHQ) {
         CopyFrameOverlay2x();
 
-        if (fadeMode > 0) {
+		switch (fadeMode) {
+			case 1:
+			if (fadeA > 0xFF)
+				fadeA = 0xFF;
             DrawRectangle(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, fadeR, fadeG, fadeB, fadeA);
             SetFadeHQ(fadeR, fadeG, fadeB, fadeA);
+			break;
+			case 2:
+			DrawClassicFade(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, fadeR, fadeG, fadeB, fadeX);
+			break;
         }
     }
     else {
-        if (fadeMode > 0) {
+		switch (fadeMode) {
+			case 1:
+			if (fadeA > 0xFF)
+				fadeA = 0xFF;
             DrawRectangle(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, fadeR, fadeG, fadeB, fadeA);
+			break;
+			case 2:
+			DrawClassicFade(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, fadeR, fadeG, fadeB, fadeX);
+			break;
         }
     }
 #endif
@@ -2663,6 +2693,134 @@ void Draw3DSkyLayer(int layerID)
 #endif
 }
 
+void DrawClassicFade(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
+{
+	
+#if RETRO_SOFTWARE_RENDER
+    if (width + XPos > GFX_LINESIZE)
+        width = GFX_LINESIZE - XPos;
+    if (XPos < 0) {
+        width += XPos;
+        XPos = 0;
+    }
+
+    if (height + YPos > SCREEN_YSIZE)
+        height = SCREEN_YSIZE - YPos;
+    if (YPos < 0) {
+        height += YPos;
+        YPos = 0;
+    }
+    if (width <= 0 || height <= 0 || A <= 0)
+        return;
+	
+	//A works differently here, and we're going to tweak the value to compensate
+	A *= 3;
+	A >>= 3;
+	
+    int pitch              = GFX_LINESIZE - width;
+    ushort *frameBufferPtr = &Engine.frameBuffer[XPos + GFX_LINESIZE * YPos];
+    ushort clr             = PACK_RGB888(R, G, B);
+
+	int h = height;
+	while (h--) {
+		int w = width;
+		while (w--) {
+			int dif;
+			
+			int Awork = A;
+			
+			int R = (*frameBufferPtr & 0xF800) >> 11;
+			int G = (*frameBufferPtr & 0x7E0) >> 6;
+			int B = *frameBufferPtr & 0x1F;
+			
+			int trgR = (clr & 0xF800) >> 11;
+			int trgG = (clr & 0x7E0) >> 6;
+			int trgB = clr & 0x1F;
+			
+			if (Awork > 0) {	
+				if (trgR > R) {
+					dif = trgR - R;
+					if (dif >= Awork) {
+							R += Awork;
+							Awork = 0;
+					}
+					else {
+						R = trgR;
+						Awork -= dif;
+					}
+				}
+				else if (trgR < R) {
+					dif = R - trgR;
+					if (dif >= Awork) {
+							R -= Awork;
+							Awork = 0;
+					}
+					else {
+						R = trgR;
+						Awork -= dif;
+					}
+				}
+			}
+			if (Awork > 0) {	
+				if (trgG > G) {
+					dif = trgG - G;
+					if (dif >= Awork) {
+							G += Awork;
+							Awork = 0;
+					}
+					else {
+						G = trgG;
+						Awork -= dif;
+					}
+				}
+				else if (trgG < G) {
+					dif = G - trgG;
+					if (dif >= Awork) {
+							G -= Awork;
+							Awork = 0;
+					}
+					else {
+						G = trgG;
+						Awork -= dif;
+					}
+				}
+			}
+			if (Awork > 0) {	
+				if (trgB > B) {
+					dif = trgB - B;
+					if (dif >= Awork) {
+							B += Awork;
+							Awork = 0;
+					}
+					else {
+						B = trgB;
+						Awork -= dif;
+					}
+				}
+				else if (trgB < B) {
+					dif = B - trgB;
+					if (dif >= Awork) {
+							B -= Awork;
+							Awork = 0;
+					}
+					else {
+						B = trgB;
+						Awork -= dif;
+					}
+				}
+			}
+			
+			R <<= 11;
+			G <<= 6;
+
+			*frameBufferPtr = R | G | B;
+			++frameBufferPtr;
+		}
+		frameBufferPtr += pitch;
+    }
+#endif
+}
+
 void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
 {
     if (A > 0xFF)
@@ -2777,7 +2935,6 @@ void DrawTintRectangle(int XPos, int YPos, int width, int height)
 	
     if (width < 0 || height < 0)
         return;
-	
     int yOffset = GFX_LINESIZE - width;
     for (ushort *frameBufferPtr = &Engine.frameBuffer[XPos + GFX_LINESIZE * YPos];; frameBufferPtr += yOffset) {
         height--;
@@ -3205,7 +3362,7 @@ void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY,
     }
 #endif
 }
-#if !RETRO_REV02
+#if RETRO_REV00 || RETRO_REV01
 void DrawScaledChar(int direction, int XPos, int YPos, int pivotX, int pivotY, int scaleX, int scaleY, int width, int height, int sprX, int sprY,
                     int sheetID)
 {
@@ -3516,6 +3673,450 @@ void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivot
 #endif
 }
 
+void DrawSpriteAllFX(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation, int scale,
+                        int sheetID, int alpha, int ink, int flags)
+{
+#if RETRO_SOFTWARE_RENDER
+	//check flags
+	int hscale = scale;
+	int vscale = scale;
+	if ((flags & FX_INK) == 0)
+		ink = INK_NONE;
+	if ((flags & FX_HSCALE) == 0)
+		hscale = 0x200;
+	if ((flags & FX_VSCALE) == 0)
+		vscale = 0x200;
+	if ((flags & FX_ROTATE) == 0)
+		rotation = 0;
+	if ((flags & 3) == 0)
+		direction = FLIP_NONE;
+	
+	if ((ink > INK_NONE) && (alpha < 0))
+		return;
+	
+	if (alpha > 0xFF)
+        alpha = 0xFF;
+	
+    if (scale == 0)
+        return;
+
+    int sprXPos    = (pivotX + sprX) << 9;
+    int sprYPos    = (pivotY + sprY) << 9;
+    int fullwidth  = width + sprX;
+    int fullheight = height + sprY;
+    int angle      = rotation & 0x1FF;
+    if (angle < 0)
+        angle += 0x200;
+    if (angle)
+        angle = 0x200 - angle;
+    int sine   = hscale * sin512LookupTable[angle] >> 9;
+    int cosine = hscale * cos512LookupTable[angle] >> 9;
+    int vsine   = vscale * sin512LookupTable[angle] >> 9;
+    int vcosine = vscale * cos512LookupTable[angle] >> 9;
+    int xPositions[4];
+    int yPositions[4];
+
+    if (direction == FLIP_X) {
+        xPositions[0] = XPos + ((vsine * (-pivotY - 2) + cosine * (pivotX + 2)) >> 9);
+        yPositions[0] = YPos + ((vcosine * (-pivotY - 2) - sine * (pivotX + 2)) >> 9);
+        xPositions[1] = XPos + ((vsine * (-pivotY - 2) + cosine * (pivotX - width - 2)) >> 9);
+        yPositions[1] = YPos + ((vcosine * (-pivotY - 2) - sine * (pivotX - width - 2)) >> 9);
+        xPositions[2] = XPos + ((vsine * (height - pivotY + 2) + cosine * (pivotX + 2)) >> 9);
+        yPositions[2] = YPos + ((vcosine * (height - pivotY + 2) - sine * (pivotX + 2)) >> 9);
+        int a         = pivotX - width - 2;
+        int b         = height - pivotY + 2;
+        xPositions[3] = XPos + ((vsine * b + cosine * a) >> 9);
+        yPositions[3] = YPos + ((vcosine * b - sine * a) >> 9);
+    }
+	else if (direction == FLIP_Y) {
+        xPositions[0] = XPos + ((vsine * (pivotY + 2) + cosine * (-pivotX - 2)) >> 9);
+        yPositions[0] = YPos + ((vcosine * (pivotY + 2) - sine * (-pivotX - 2)) >> 9);
+        xPositions[1] = XPos + ((vsine * (pivotY + 2) + cosine * (width - pivotX + 2)) >> 9);
+        yPositions[1] = YPos + ((vcosine * (pivotY + 2) - sine * (width - pivotX + 2)) >> 9);
+        xPositions[2] = XPos + ((vsine * (pivotY - height - 2) + cosine * (-pivotX - 2)) >> 9);
+        yPositions[2] = YPos + ((vcosine * (pivotY - height - 2) - sine * (-pivotX - 2)) >> 9);
+        int a         = width - pivotX + 2;
+        int b         = pivotY - height - 2;
+        xPositions[3] = XPos + ((vsine * b + cosine * a) >> 9);
+        yPositions[3] = YPos + ((vcosine * b - sine * a) >> 9);
+    }
+	else if (direction == FLIP_XY) {
+        xPositions[0] = XPos + ((vsine * (pivotY + 2) + cosine * (pivotX + 2)) >> 9);
+        yPositions[0] = YPos + ((vcosine * (pivotY + 2) - sine * (pivotX + 2)) >> 9);
+        xPositions[1] = XPos + ((vsine * (pivotY + 2) + cosine * (pivotX - width - 2)) >> 9);
+        yPositions[1] = YPos + ((vcosine * (pivotY + 2) - sine * (pivotX - width - 2)) >> 9);
+        xPositions[2] = XPos + ((vsine * (pivotY - height - 2) + cosine * (pivotX + 2)) >> 9);
+        yPositions[2] = YPos + ((vcosine * (pivotY - height - 2) - sine * (pivotX + 2)) >> 9);
+        int a         = pivotX - width - 2;
+        int b         = pivotY - height - 2;
+        xPositions[3] = XPos + ((vsine * b + cosine * a) >> 9);
+        yPositions[3] = YPos + ((vcosine * b - sine * a) >> 9);
+    }
+    else {
+        xPositions[0] = XPos + ((vsine * (-pivotY - 2) + cosine * (-pivotX - 2)) >> 9);
+        yPositions[0] = YPos + ((vcosine * (-pivotY - 2) - sine * (-pivotX - 2)) >> 9);
+        xPositions[1] = XPos + ((vsine * (-pivotY - 2) + cosine * (width - pivotX + 2)) >> 9);
+        yPositions[1] = YPos + ((vcosine * (-pivotY - 2) - sine * (width - pivotX + 2)) >> 9);
+        xPositions[2] = XPos + ((vsine * (height - pivotY + 2) + cosine * (-pivotX - 2)) >> 9);
+        yPositions[2] = YPos + ((vcosine * (height - pivotY + 2) - sine * (-pivotX - 2)) >> 9);
+        int a         = width - pivotX + 2;
+        int b         = height - pivotY + 2;
+        xPositions[3] = XPos + ((vsine * b + cosine * a) >> 9);
+        yPositions[3] = YPos + ((vcosine * b - sine * a) >> 9);
+    }
+    int truescale = (signed int)(float)((float)(512.0 / (float)hscale) * 512.0);
+    sine          = truescale * sin512LookupTable[angle] >> 9;
+    cosine        = truescale * cos512LookupTable[angle] >> 9;
+    truescale = (signed int)(float)((float)(512.0 / (float)vscale) * 512.0);
+    vsine          = truescale * sin512LookupTable[angle] >> 9;
+    vcosine        = truescale * cos512LookupTable[angle] >> 9;
+
+    int left = GFX_LINESIZE;
+    for (int i = 0; i < 4; ++i) {
+        if (xPositions[i] < left)
+            left = xPositions[i];
+    }
+    if (left < 0)
+        left = 0;
+
+    int right = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (xPositions[i] > right)
+            right = xPositions[i];
+    }
+    if (right > GFX_LINESIZE)
+        right = GFX_LINESIZE;
+    int maxX = right - left;
+
+    int top = SCREEN_YSIZE;
+    for (int i = 0; i < 4; ++i) {
+        if (yPositions[i] < top)
+            top = yPositions[i];
+    }
+    if (top < 0)
+        top = 0;
+
+    int bottom = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (yPositions[i] > bottom)
+            bottom = yPositions[i];
+    }
+    if (bottom > SCREEN_YSIZE)
+        bottom = SCREEN_YSIZE;
+    int maxY = bottom - top;
+
+    if (maxX <= 0 || maxY <= 0)
+        return;
+
+	//ink tables here -- unused by this function
+	//ushort *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
+	//ushort *pixelBlend   = &blendLookupTable[0x20 * alpha];
+	//ushort *subBlendTable  = &subtractLookupTable[0x20 * alpha];
+	
+    GFXSurface *surface    = &gfxSurface[sheetID];
+    int pitch              = GFX_LINESIZE - maxX;
+    int lineSize           = surface->widthShift;
+    ushort *frameBufferPtr = &Engine.frameBuffer[left + GFX_LINESIZE * top];
+    byte *lineBuffer       = &gfxLineBuffer[top];
+    int startX             = left - XPos;
+    int startY             = top - YPos;
+    int shiftPivot         = (sprX << 9) - 1;
+    fullwidth <<= 9;
+    int shiftheight = (sprY << 9) - 1;
+    fullheight <<= 9;
+    byte *gfxData = &graphicData[surface->dataPosition];
+    if (vcosine < 0 || vsine < 0)
+        sprYPos += vsine + vcosine;
+
+    if (direction == FLIP_X) {
+        int drawX = sprXPos - (cosine * startX - sine * startY) - (truescale >> 1);
+        int drawY = vcosine * startY + sprYPos + vsine * startX;
+        while (maxY--) {
+            activePalette   = fullPalette[*lineBuffer];
+            activePalette32 = fullPalette32[*lineBuffer];
+            lineBuffer++;
+            int finalX = drawX;
+            int finalY = drawY;
+            int w      = maxX;
+            while (w--) {
+                if (finalX > shiftPivot && finalX < fullwidth && finalY > shiftheight && finalY < fullheight) {
+                    byte index = gfxData[(finalY >> 9 << lineSize) + (finalX >> 9)];
+                    if (index > 0) {
+						
+						ushort color = activePalette[index];
+						int R;
+						int G;
+						int B;
+						switch (ink) {
+							case INK_NONE:
+								*frameBufferPtr = activePalette[index];
+								break;
+							case INK_BLEND:
+								*frameBufferPtr = ((activePalette[index] & 0xF7DE) >> 1) + ((*frameBufferPtr & 0xF7DE) >> 1);
+								break;
+							case INK_ALPHA:
+								//R = (fbufferBlend[(*frameBufferPtr & 0xF800) >> 11] + pixelBlend[(color & 0xF800) >> 11]) << 11;
+								//G = (fbufferBlend[(*frameBufferPtr & 0x7E0) >> 6] + pixelBlend[(color & 0x7E0) >> 6]) << 6;
+								//B = fbufferBlend[*frameBufferPtr & 0x1F] + pixelBlend[color & 0x1F];
+								
+								R = ((((*frameBufferPtr & 0xF800) >> 11) * (0x100 - alpha)) + (((color & 0xF800) >> 11) * alpha) >> 8) << 11;
+								G = ((((*frameBufferPtr & 0x7E0) >> 5) * (0x100 - alpha)) + (((color & 0x7E0) >> 5) * alpha) >> 8) << 5;
+								B = (((*frameBufferPtr & 0x1F) * (0x100 - alpha)) + ((color & 0x1F) * alpha) >> 8);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_ADD:
+								//R = minVal((pixelBlend[(color & 0xF800) >> 11] << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								//G = minVal((pixelBlend[(color & 0x7E0) >> 6] << 6) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								//B = minVal(pixelBlend[color & 0x1F] + (*frameBufferPtr & 0x1F), 0x1F);
+
+								R = minVal((((((color & 0xF800) >> 11) * alpha) >> 8) << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								G = minVal((((((color & 0x7E0) >> 5) * alpha) >> 8) << 5) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								B = minVal((((color & 0x1F) * alpha) >> 8) + (*frameBufferPtr & 0x1F), 0x1F);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_SUB:
+								//R = maxVal((*frameBufferPtr & 0xF800) - (subBlendTable[(color & 0xF800) >> 11] << 11), 0);
+								//G = maxVal((*frameBufferPtr & 0x7E0) - (subBlendTable[(color & 0x7E0) >> 6] << 6), 0);
+								//B = maxVal((*frameBufferPtr & 0x1F) - subBlendTable[color & 0x1F], 0);
+                
+								R = maxVal((*frameBufferPtr & 0xF800) - (((((0xF800 - (color & 0xF800)) >> 11) * alpha) >> 8) << 11), 0);
+								G = maxVal((*frameBufferPtr & 0x7E0) - (((((0x7E0 - (color & 0x7E0)) >> 5) * alpha) >> 8) << 5), 0);
+								B = maxVal((*frameBufferPtr & 0x1F) - (((0x1F - (color & 0x1F)) * alpha) >> 8), 0);
+
+								*frameBufferPtr = R | G | B;
+								break;
+						}
+					}
+                }
+                ++frameBufferPtr;
+                finalX -= cosine;
+                finalY += vsine;
+            }
+            drawX += sine;
+            drawY += vcosine;
+            frameBufferPtr += pitch;
+        }
+    }
+    else if (direction == FLIP_Y) {
+        int drawX = sprXPos + cosine * startX - sine * startY;
+        int drawY = sprYPos - (vcosine * startY + vsine * startX);
+        while (maxY--) {
+            activePalette   = fullPalette[*lineBuffer];
+            activePalette32 = fullPalette32[*lineBuffer];
+            lineBuffer++;
+            int finalX = drawX;
+            int finalY = drawY;
+            int w      = maxX;
+            while (w--) {
+                if (finalX > shiftPivot && finalX < fullwidth && finalY > shiftheight && finalY < fullheight) {
+                    byte index = gfxData[(finalY >> 9 << lineSize) + (finalX >> 9)];
+                    if (index > 0) {
+						
+						ushort color = activePalette[index];
+						int R;
+						int G;
+						int B;
+						switch (ink) {
+							case INK_NONE:
+								*frameBufferPtr = activePalette[index];
+								break;
+							case INK_BLEND:
+								*frameBufferPtr = ((activePalette[index] & 0xF7DE) >> 1) + ((*frameBufferPtr & 0xF7DE) >> 1);
+								break;
+							case INK_ALPHA:
+								//R = (fbufferBlend[(*frameBufferPtr & 0xF800) >> 11] + pixelBlend[(color & 0xF800) >> 11]) << 11;
+								//G = (fbufferBlend[(*frameBufferPtr & 0x7E0) >> 6] + pixelBlend[(color & 0x7E0) >> 6]) << 6;
+								//B = fbufferBlend[*frameBufferPtr & 0x1F] + pixelBlend[color & 0x1F];
+								
+								R = ((((*frameBufferPtr & 0xF800) >> 11) * (0x100 - alpha)) + (((color & 0xF800) >> 11) * alpha) >> 8) << 11;
+								G = ((((*frameBufferPtr & 0x7E0) >> 5) * (0x100 - alpha)) + (((color & 0x7E0) >> 5) * alpha) >> 8) << 5;
+								B = (((*frameBufferPtr & 0x1F) * (0x100 - alpha)) + ((color & 0x1F) * alpha) >> 8);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_ADD:
+								//R = minVal((pixelBlend[(color & 0xF800) >> 11] << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								//G = minVal((pixelBlend[(color & 0x7E0) >> 6] << 6) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								//B = minVal(pixelBlend[color & 0x1F] + (*frameBufferPtr & 0x1F), 0x1F);
+
+								R = minVal((((((color & 0xF800) >> 11) * alpha) >> 8) << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								G = minVal((((((color & 0x7E0) >> 5) * alpha) >> 8) << 5) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								B = minVal((((color & 0x1F) * alpha) >> 8) + (*frameBufferPtr & 0x1F), 0x1F);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_SUB:
+								//R = maxVal((*frameBufferPtr & 0xF800) - (subBlendTable[(color & 0xF800) >> 11] << 11), 0);
+								//G = maxVal((*frameBufferPtr & 0x7E0) - (subBlendTable[(color & 0x7E0) >> 6] << 6), 0);
+								//B = maxVal((*frameBufferPtr & 0x1F) - subBlendTable[color & 0x1F], 0);
+                
+								R = maxVal((*frameBufferPtr & 0xF800) - (((((0xF800 - (color & 0xF800)) >> 11) * alpha) >> 8) << 11), 0);
+								G = maxVal((*frameBufferPtr & 0x7E0) - (((((0x7E0 - (color & 0x7E0)) >> 5) * alpha) >> 8) << 5), 0);
+								B = maxVal((*frameBufferPtr & 0x1F) - (((0x1F - (color & 0x1F)) * alpha) >> 8), 0);
+
+								*frameBufferPtr = R | G | B;
+								break;
+						}
+					}
+
+                }
+                ++frameBufferPtr;
+                finalX += cosine;
+                finalY -= vsine;
+            }
+            drawX -= sine;
+            drawY -= vcosine;
+            frameBufferPtr += pitch;
+        }
+    }
+    else if (direction == FLIP_XY) {
+        int drawX = sprXPos - (cosine * startX - sine * startY) - (truescale >> 1);
+        int drawY = sprYPos - (vcosine * startY + vsine * startX);
+        while (maxY--) {
+            activePalette   = fullPalette[*lineBuffer];
+            activePalette32 = fullPalette32[*lineBuffer];
+            lineBuffer++;
+            int finalX = drawX;
+            int finalY = drawY;
+            int w      = maxX;
+            while (w--) {
+                if (finalX > shiftPivot && finalX < fullwidth && finalY > shiftheight && finalY < fullheight) {
+                    byte index = gfxData[(finalY >> 9 << lineSize) + (finalX >> 9)];
+                    if (index > 0) {
+						
+						ushort color = activePalette[index];
+						int R;
+						int G;
+						int B;
+						switch (ink) {
+							case INK_NONE:
+								*frameBufferPtr = activePalette[index];
+								break;
+							case INK_BLEND:
+								*frameBufferPtr = ((activePalette[index] & 0xF7DE) >> 1) + ((*frameBufferPtr & 0xF7DE) >> 1);
+								break;
+							case INK_ALPHA:
+								//R = (fbufferBlend[(*frameBufferPtr & 0xF800) >> 11] + pixelBlend[(color & 0xF800) >> 11]) << 11;
+								//G = (fbufferBlend[(*frameBufferPtr & 0x7E0) >> 6] + pixelBlend[(color & 0x7E0) >> 6]) << 6;
+								//B = fbufferBlend[*frameBufferPtr & 0x1F] + pixelBlend[color & 0x1F];
+								
+								R = ((((*frameBufferPtr & 0xF800) >> 11) * (0x100 - alpha)) + (((color & 0xF800) >> 11) * alpha) >> 8) << 11;
+								G = ((((*frameBufferPtr & 0x7E0) >> 5) * (0x100 - alpha)) + (((color & 0x7E0) >> 5) * alpha) >> 8) << 5;
+								B = (((*frameBufferPtr & 0x1F) * (0x100 - alpha)) + ((color & 0x1F) * alpha) >> 8);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_ADD:
+								//R = minVal((pixelBlend[(color & 0xF800) >> 11] << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								//G = minVal((pixelBlend[(color & 0x7E0) >> 6] << 6) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								//B = minVal(pixelBlend[color & 0x1F] + (*frameBufferPtr & 0x1F), 0x1F);
+
+								R = minVal((((((color & 0xF800) >> 11) * alpha) >> 8) << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								G = minVal((((((color & 0x7E0) >> 5) * alpha) >> 8) << 5) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								B = minVal((((color & 0x1F) * alpha) >> 8) + (*frameBufferPtr & 0x1F), 0x1F);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_SUB:
+								//R = maxVal((*frameBufferPtr & 0xF800) - (subBlendTable[(color & 0xF800) >> 11] << 11), 0);
+								//G = maxVal((*frameBufferPtr & 0x7E0) - (subBlendTable[(color & 0x7E0) >> 6] << 6), 0);
+								//B = maxVal((*frameBufferPtr & 0x1F) - subBlendTable[color & 0x1F], 0);
+                
+								R = maxVal((*frameBufferPtr & 0xF800) - (((((0xF800 - (color & 0xF800)) >> 11) * alpha) >> 8) << 11), 0);
+								G = maxVal((*frameBufferPtr & 0x7E0) - (((((0x7E0 - (color & 0x7E0)) >> 5) * alpha) >> 8) << 5), 0);
+								B = maxVal((*frameBufferPtr & 0x1F) - (((0x1F - (color & 0x1F)) * alpha) >> 8), 0);
+
+								*frameBufferPtr = R | G | B;
+								break;
+						}
+					}
+
+                }
+                ++frameBufferPtr;
+                finalX -= cosine;
+                finalY -= vsine;
+            }
+            drawX += sine;
+            drawY -= vcosine;
+            frameBufferPtr += pitch;
+        }
+    }
+    else {
+        int drawX = sprXPos + cosine * startX - sine * startY;
+        int drawY = vcosine * startY + sprYPos + vsine * startX;
+        while (maxY--) {
+            activePalette   = fullPalette[*lineBuffer];
+            activePalette32 = fullPalette32[*lineBuffer];
+            lineBuffer++;
+            int finalX = drawX;
+            int finalY = drawY;
+            int w      = maxX;
+            while (w--) {
+                if (finalX > shiftPivot && finalX < fullwidth && finalY > shiftheight && finalY < fullheight) {
+                    byte index = gfxData[(finalY >> 9 << lineSize) + (finalX >> 9)];
+                    if (index > 0) {
+						
+						ushort color = activePalette[index];
+						int R;
+						int G;
+						int B;
+						switch (ink) {
+							case INK_NONE:
+								*frameBufferPtr = activePalette[index];
+								break;
+							case INK_BLEND:
+								*frameBufferPtr = ((activePalette[index] & 0xF7DE) >> 1) + ((*frameBufferPtr & 0xF7DE) >> 1);
+								break;
+							case INK_ALPHA:
+								//R = (fbufferBlend[(*frameBufferPtr & 0xF800) >> 11] + pixelBlend[(color & 0xF800) >> 11]) << 11;
+								//G = (fbufferBlend[(*frameBufferPtr & 0x7E0) >> 6] + pixelBlend[(color & 0x7E0) >> 6]) << 6;
+								//B = fbufferBlend[*frameBufferPtr & 0x1F] + pixelBlend[color & 0x1F];
+								
+								R = ((((*frameBufferPtr & 0xF800) >> 11) * (0x100 - alpha)) + (((color & 0xF800) >> 11) * alpha) >> 8) << 11;
+								G = ((((*frameBufferPtr & 0x7E0) >> 5) * (0x100 - alpha)) + (((color & 0x7E0) >> 5) * alpha) >> 8) << 5;
+								B = (((*frameBufferPtr & 0x1F) * (0x100 - alpha)) + ((color & 0x1F) * alpha) >> 8);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_ADD:
+								//R = minVal((pixelBlend[(color & 0xF800) >> 11] << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								//G = minVal((pixelBlend[(color & 0x7E0) >> 6] << 6) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								//B = minVal(pixelBlend[color & 0x1F] + (*frameBufferPtr & 0x1F), 0x1F);
+
+								R = minVal((((((color & 0xF800) >> 11) * alpha) >> 8) << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+								G = minVal((((((color & 0x7E0) >> 5) * alpha) >> 8) << 5) + (*frameBufferPtr & 0x7E0), 0x7E0);
+								B = minVal((((color & 0x1F) * alpha) >> 8) + (*frameBufferPtr & 0x1F), 0x1F);
+
+								*frameBufferPtr = R | G | B;
+								break;
+							case INK_SUB:
+								//R = maxVal((*frameBufferPtr & 0xF800) - (subBlendTable[(color & 0xF800) >> 11] << 11), 0);
+								//G = maxVal((*frameBufferPtr & 0x7E0) - (subBlendTable[(color & 0x7E0) >> 6] << 6), 0);
+								//B = maxVal((*frameBufferPtr & 0x1F) - subBlendTable[color & 0x1F], 0);
+                
+								R = maxVal((*frameBufferPtr & 0xF800) - (((((0xF800 - (color & 0xF800)) >> 11) * alpha) >> 8) << 11), 0);
+								G = maxVal((*frameBufferPtr & 0x7E0) - (((((0x7E0 - (color & 0x7E0)) >> 5) * alpha) >> 8) << 5), 0);
+								B = maxVal((*frameBufferPtr & 0x1F) - (((0x1F - (color & 0x1F)) * alpha) >> 8), 0);
+
+								*frameBufferPtr = R | G | B;
+								break;
+						}
+					}
+                }
+                ++frameBufferPtr;
+                finalX += cosine;
+                finalY += vsine;
+            }
+            drawX -= sine;
+            drawY += vcosine;
+            frameBufferPtr += pitch;
+        }
+    }
+#endif
+}
+
 void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
 #if RETRO_SOFTWARE_RENDER
@@ -3603,8 +4204,9 @@ void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX,
         }
     }
     else {
-        ushort *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-        ushort *pixelBlend   = &blendLookupTable[0x20 * alpha];
+		//Commented out - we're calculating it live
+        //ushort *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
+        //ushort *pixelBlend   = &blendLookupTable[0x20 * alpha];
 
         while (height--) {
             activePalette   = fullPalette[*lineBuffer];
@@ -3615,9 +4217,13 @@ void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX,
                 if (*gfxData > 0) {
                     ushort color = activePalette[*gfxData];
 
-                    int R = (fbufferBlend[(*frameBufferPtr & 0xF800) >> 11] + pixelBlend[(color & 0xF800) >> 11]) << 11;
-                    int G = (fbufferBlend[(*frameBufferPtr & 0x7E0) >> 6] + pixelBlend[(color & 0x7E0) >> 6]) << 6;
-                    int B = fbufferBlend[*frameBufferPtr & 0x1F] + pixelBlend[color & 0x1F];
+                    //int R = (fbufferBlend[(*frameBufferPtr & 0xF800) >> 11] + pixelBlend[(color & 0xF800) >> 11]) << 11;
+                    //int G = (fbufferBlend[(*frameBufferPtr & 0x7E0) >> 6] + pixelBlend[(color & 0x7E0) >> 6]) << 6;
+                    //int B = fbufferBlend[*frameBufferPtr & 0x1F] + pixelBlend[color & 0x1F];
+					
+					int R = ((((*frameBufferPtr & 0xF800) >> 11) * (0x100 - alpha)) + (((color & 0xF800) >> 11) * alpha) >> 8) << 11;
+					int G = ((((*frameBufferPtr & 0x7E0) >> 5) * (0x100 - alpha)) + (((color & 0x7E0) >> 5) * alpha) >> 8) << 5;
+					int B = (((*frameBufferPtr & 0x1F) * (0x100 - alpha)) + ((color & 0x1F) * alpha) >> 8);
 
                     *frameBufferPtr = R | G | B;
                 }
@@ -3652,7 +4258,8 @@ void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sp
     if (width <= 0 || height <= 0 || alpha <= 0)
         return;
 
-    ushort *blendTablePtr  = &blendLookupTable[0x20 * alpha];
+	//Commented out - we're calculating it live
+    //ushort *pixelBlend  = &blendLookupTable[0x20 * alpha];
     GFXSurface *surface    = &gfxSurface[sheetID];
     int pitch              = GFX_LINESIZE - width;
     int gfxPitch           = surface->width - width;
@@ -3669,9 +4276,13 @@ void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sp
             if (*gfxData > 0) {
                 ushort color = activePalette[*gfxData];
 
-                int R = minVal((blendTablePtr[(color & 0xF800) >> 11] << 11) + (*frameBufferPtr & 0xF800), 0xF800);
-                int G = minVal((blendTablePtr[(color & 0x7E0) >> 6] << 6) + (*frameBufferPtr & 0x7E0), 0x7E0);
-                int B = minVal(blendTablePtr[color & 0x1F] + (*frameBufferPtr & 0x1F), 0x1F);
+               // int R = minVal((pixelBlend[(color & 0xF800) >> 11] << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+               // int G = minVal((pixelBlend[(color & 0x7E0) >> 6] << 6) + (*frameBufferPtr & 0x7E0), 0x7E0);
+               // int B = minVal(pixelBlend[color & 0x1F] + (*frameBufferPtr & 0x1F), 0x1F);
+
+                int R = minVal((((((color & 0xF800) >> 11) * alpha) >> 8) << 11) + (*frameBufferPtr & 0xF800), 0xF800);
+                int G = minVal((((((color & 0x7E0) >> 5) * alpha) >> 8) << 5) + (*frameBufferPtr & 0x7E0), 0x7E0);
+                int B = minVal((((color & 0x1F) * alpha) >> 8) + (*frameBufferPtr & 0x1F), 0x1F);
 
                 *frameBufferPtr = R | G | B;
             }
@@ -3706,7 +4317,8 @@ void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int
     if (width <= 0 || height <= 0 || alpha <= 0)
         return;
 
-    ushort *subBlendTable  = &subtractLookupTable[0x20 * alpha];
+    //Commented out - we're calculating it live
+    //ushort *subBlendTable  = &subtractLookupTable[0x20 * alpha];
     GFXSurface *surface    = &gfxSurface[sheetID];
     int pitch              = GFX_LINESIZE - width;
     int gfxPitch           = surface->width - width;
@@ -3723,9 +4335,13 @@ void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int
             if (*gfxData > 0) {
                 ushort color = activePalette[*gfxData];
 
-                int R = maxVal((*frameBufferPtr & 0xF800) - (subBlendTable[(color & 0xF800) >> 11] << 11), 0);
-                int G = maxVal((*frameBufferPtr & 0x7E0) - (subBlendTable[(color & 0x7E0) >> 6] << 6), 0);
-                int B = maxVal((*frameBufferPtr & 0x1F) - subBlendTable[color & 0x1F], 0);
+                //int R = maxVal((*frameBufferPtr & 0xF800) - (subBlendTable[(color & 0xF800) >> 11] << 11), 0);
+                //int G = maxVal((*frameBufferPtr & 0x7E0) - (subBlendTable[(color & 0x7E0) >> 6] << 6), 0);
+                //int B = maxVal((*frameBufferPtr & 0x1F) - subBlendTable[color & 0x1F], 0);
+
+                int R = maxVal((*frameBufferPtr & 0xF800) - (((((0xF800 - (color & 0xF800)) >> 11) * alpha) >> 8) << 11), 0);
+                int G = maxVal((*frameBufferPtr & 0x7E0) - (((((0x7E0 - (color & 0x7E0)) >> 5) * alpha) >> 8) << 5), 0);
+                int B = maxVal((*frameBufferPtr & 0x1F) - (((0x1F - (color & 0x1F)) * alpha) >> 8), 0);
 
                 *frameBufferPtr = R | G | B;
             }
@@ -3748,44 +4364,23 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
 
     switch (sprAnim->rotationStyle) {
         case ROTSTYLE_NONE:
-            switch (entity->direction) {
-                case FLIP_NONE:
-                    DrawSpriteFlipped(frame->pivotX + XPos, frame->pivotY + YPos, frame->width, frame->height, frame->sprX, frame->sprY, FLIP_NONE,
-                                      frame->sheetID);
-                    break;
-
-                case FLIP_X:
-                    DrawSpriteFlipped(XPos - frame->width - frame->pivotX, frame->pivotY + YPos, frame->width, frame->height, frame->sprX,
-                                      frame->sprY, FLIP_X, frame->sheetID);
-                    break;
-                case FLIP_Y:
-
-                    DrawSpriteFlipped(frame->pivotX + XPos, YPos - frame->height - frame->pivotY, frame->width, frame->height, frame->sprX,
-                                      frame->sprY, FLIP_Y, frame->sheetID);
-                    break;
-
-                case FLIP_XY:
-                    DrawSpriteFlipped(XPos - frame->width - frame->pivotX, YPos - frame->height - frame->pivotY, frame->width, frame->height,
-                                      frame->sprX, frame->sprY, FLIP_XY, frame->sheetID);
-                    break;
-
-                default: break;
-            }
+			DrawSpriteAllFX(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
+							 0, entity->scale, frame->sheetID, entity->alpha, entity->inkEffect, FX_ALL - FX_ROTATE);
             break;
 
         case ROTSTYLE_FULL:
-            DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
-                              entity->rotation, frame->sheetID);
+			DrawSpriteAllFX(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
+							 entity->rotation, entity->scale, frame->sheetID, entity->alpha, entity->inkEffect, FX_ALL);
             break;
 
         case ROTSTYLE_45DEG:
             if (entity->rotation >= 0x100)
-                DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width,
-                                  frame->height, 0x200 - ((0x214 - entity->rotation) >> 6 << 6), frame->sheetID);
-            else
-                DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width,
-                                  frame->height, (entity->rotation + 20) >> 6 << 6, frame->sheetID);
-            break;
+                DrawSpriteAllFX(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
+							 0x200 - ((0x214 - entity->rotation) >> 6 << 6), entity->scale, frame->sheetID, entity->alpha, entity->inkEffect, FX_ALL);
+			else
+                DrawSpriteAllFX(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
+							 (entity->rotation + 20) >> 6 << 6, entity->scale, frame->sheetID, entity->alpha, entity->inkEffect, FX_ALL);
+			break;
 
         case ROTSTYLE_STATICFRAMES: {
             if (entity->rotation >= 0x100)
@@ -3847,8 +4442,8 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
             }
 
             frame = &animFrames[sprAnim->frameListOffset + frameID];
-            DrawSpriteRotated(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
-                              rotation, frame->sheetID);
+            DrawSpriteAllFX(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width, frame->height,
+							 rotation, entity->scale, frame->sheetID, entity->alpha, entity->inkEffect, FX_ALL);
             // DrawSpriteRotozoom(entity->direction, XPos, YPos, -frame->pivotX, -frame->pivotY, frame->sprX, frame->sprY, frame->width,
             // frame->height,
             //                  rotation, entity->scale, frame->sheetID);
@@ -4219,9 +4814,7 @@ void DrawTexturedFace(void *v, byte sheetID)
             }
             ushort *fbPtr = &frameBufferPtr[startX];
             frameBufferPtr += GFX_LINESIZE;
-
-            int counter = posDifference + 1;
-
+            int counter = posDifference;
             while (counter--) {
                 if (UPos < 0)
                     UPos = 0;
@@ -4350,11 +4943,7 @@ void DrawTexturedFaceBlended(void *v, byte sheetID)
             }
             ushort *fbPtr = &frameBufferPtr[startX];
             frameBufferPtr += GFX_LINESIZE;
-#if RETRO_REV02
             int counter = posDifference;
-#else
-            int counter = posDifference + 1;
-#endif
             while (counter--) {
                 if (UPos < 0)
                     UPos = 0;
@@ -4373,7 +4962,7 @@ void DrawTexturedFaceBlended(void *v, byte sheetID)
 #endif
 }
 
-#if !RETRO_REV02
+#if RETRO_REV00 || RETRO_REV01
 void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
 {
     TextMenu *tMenu = (TextMenu *)menu;
