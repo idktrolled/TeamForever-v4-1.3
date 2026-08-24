@@ -36,6 +36,7 @@ set(RETRO_FILES
     RSDKv4/fcaseopen.c
     RSDKv4/main.cpp
     RSDKv4/Math.cpp
+    RSDKv4/Video.cpp
     RSDKv4/ModAPI.cpp
     RSDKv4/Networking.cpp
     RSDKv4/Object.cpp
