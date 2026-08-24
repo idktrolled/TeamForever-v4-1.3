@@ -1,8 +1,14 @@
 SDL2: https://www.libsdl.org/download-2.0.php
-Download the source code and unzip it in "./SDL/".
+Download the source code and unzip it in "./dependencies/android/SDL/".
+
+GLEW: http://glew.sourceforge.net/
+Download the binaries and unzip them in "./dependencies/android/glew/".
 
 libogg: https://xiph.org/downloads/ (libogg)
-Download libogg and unzip it in "./libogg/".
+Download libogg and unzip it in "./dependencies/android/libogg/".
 
 libvorbis: https://xiph.org/downloads/ (libvorbis)
-Download libvorbis and unzip it in "./libvorbis/".
+Download libvorbis and unzip it in "./dependencies/android/libvorbis/".
+
+libtheora: https://xiph.org/downloads/ (libtheora)
+Download libtheora and unzip it in "./dependencies/android/libtheora/".
