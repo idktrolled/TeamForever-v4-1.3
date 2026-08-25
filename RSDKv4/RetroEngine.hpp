@@ -6,10 +6,22 @@
 
 // Setting this to true removes (almost) ALL changes from the original code, the trade off is that a playable game cannot be built, it is advised to
 // be set to true only for preservation purposes
+#ifndef RETRO_USE_ORIGINAL_CODE
 #define RETRO_USE_ORIGINAL_CODE (0)
+#endif
 
+#ifndef RETRO_USE_MOD_LOADER
 #define RETRO_USE_MOD_LOADER (!RETRO_USE_ORIGINAL_CODE && 1)
+#endif
+
+#ifndef RETRO_USE_NETWORKING
 #define RETRO_USE_NETWORKING (!RETRO_USE_ORIGINAL_CODE && 1)
+#endif
+
+// Forces all DLC flags to be disabled, this should be enabled in any public releases
+#ifndef RSDK_AUTOBUILD
+#define RSDK_AUTOBUILD (0)
+#endif
 
 // ================
 // STANDARD LIBS
@@ -17,6 +29,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <cmath>
+#if RETRO_USE_MOD_LOADER
+#include <regex>
+#endif
 
 // ================
 // STANDARD TYPES
@@ -38,7 +53,6 @@ typedef unsigned int uint;
 // Custom Platforms start here
 #define RETRO_UWP   (7)
 #define RETRO_LINUX (8)
-#define RETRO_SWITCH (9)
 
 // Platform types (Game manages platform-specific code such as HUD position using this rather than the above)
 #define RETRO_STANDARD (0)
@@ -69,9 +83,6 @@ typedef unsigned int uint;
 #define RETRO_PLATFORM   (RETRO_OSX)
 #define RETRO_DEVICETYPE (RETRO_STANDARD)
 #endif
-#elif defined __SWITCH__
-#define RETRO_PLATFORM   (RETRO_SWITCH)
-#define RETRO_DEVICETYPE (RETRO_STANDARD)
 #elif defined __ANDROID__
 #define RETRO_PLATFORM   (RETRO_ANDROID)
 #define RETRO_DEVICETYPE (RETRO_MOBILE)
@@ -81,11 +92,11 @@ typedef unsigned int uint;
 #define RETRO_DEVICETYPE (RETRO_STANDARD)
 #else
 //#error "No Platform was defined"
-#define RETRO_PLATFORM   (RETRO_WIN)
+#define RETRO_PLATFORM   (RETRO_LINUX)
 #define RETRO_DEVICETYPE (RETRO_STANDARD)
 #endif
 
-#define DEFAULT_SCREEN_XSIZE 426
+#define DEFAULT_SCREEN_XSIZE 424
 #define DEFAULT_FULLSCREEN   false
 #define RETRO_USING_MOUSE
 #define RETRO_USING_TOUCH
@@ -94,10 +105,19 @@ typedef unsigned int uint;
 #define BASE_PATH ""
 #endif
 
+#if !defined(RETRO_USE_SDL2) && !defined(RETRO_USE_SDL1)
+#define RETRO_USE_SDL2 (1)
+#endif
+
 #if RETRO_PLATFORM == RETRO_WIN || RETRO_PLATFORM == RETRO_OSX || RETRO_PLATFORM == RETRO_LINUX || RETRO_PLATFORM == RETRO_UWP                       \
-    || RETRO_PLATFORM == RETRO_ANDROID || RETRO_PLATFORM == RETRO_SWITCH
+    || RETRO_PLATFORM == RETRO_ANDROID
+#ifdef RETRO_USE_SDL2
 #define RETRO_USING_SDL1 (0)
 #define RETRO_USING_SDL2 (1)
+#elif defined(RETRO_USE_SDL1)
+#define RETRO_USING_SDL1 (1)
+#define RETRO_USING_SDL2 (0)
+#endif
 #else // Since its an else & not an elif these platforms probably aren't supported yet
 #define RETRO_USING_SDL1 (0)
 #define RETRO_USING_SDL2 (0)
@@ -111,24 +131,23 @@ typedef unsigned int uint;
 #define RETRO_GAMEPLATFORM (RETRO_STANDARD)
 #endif
 
-#define RETRO_SW_RENDER  (0)
-#define RETRO_HW_RENDER  (1)
-#define RETRO_RENDERTYPE (RETRO_SW_RENDER)
+#define RETRO_SW_RENDER (0)
+#define RETRO_HW_RENDER (1)
 
 #ifdef USE_SW_REN
-#undef RETRO_RENDERTYPE
+#define RETRO_RENDERTYPE (RETRO_SW_RENDER)
+#elif defined(USE_HW_REN)
+#define RETRO_RENDERTYPE (RETRO_HW_RENDER)
+#elif !defined(RETRO_RENDERTYPE)
 #define RETRO_RENDERTYPE (RETRO_SW_RENDER)
 #endif
 
-#ifdef USE_HW_REN
-#undef RETRO_RENDERTYPE
-#define RETRO_RENDERTYPE (RETRO_HW_RENDER)
+#ifndef RETRO_USING_OPENGL
+#define RETRO_USING_OPENGL (1)
 #endif
 
-#define RETRO_USING_OPENGL (0)
-
 #define RETRO_SOFTWARE_RENDER (RETRO_RENDERTYPE == RETRO_SW_RENDER)
-#define RETRO_HARDWARE_RENDER (RETRO_RENDERTYPE == RETRO_HW_RENDER)
+//#define RETRO_HARDWARE_RENDER (RETRO_RENDERTYPE == RETRO_HW_RENDER)
 
 #if RETRO_USING_OPENGL
 #if RETRO_PLATFORM == RETRO_ANDROID
@@ -178,11 +197,6 @@ typedef unsigned int uint;
 #define GL_FRAMEBUFFER         GL_FRAMEBUFFER_EXT
 #define GL_COLOR_ATTACHMENT0   GL_COLOR_ATTACHMENT0_EXT
 #define GL_FRAMEBUFFER_BINDING GL_FRAMEBUFFER_BINDING_EXT
-#elif RETRO_PLATFORM == RETRO_SWITCH
-#include <GLES/gl.h>
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <glad/glad.h>  // OpenGL loader
 #else
 #include <GL/glew.h>
 #endif
@@ -200,31 +214,28 @@ typedef unsigned int uint;
 #define RETRO_GAMEPLATFORMID (RETRO_WIN)
 #elif RETRO_PLATFORM == RETRO_UWP
 #define RETRO_GAMEPLATFORMID (UAP_GetRetroGamePlatformId())
-#elif RETRO_PLATFORM == RETRO_SWITCH
-#define RETRO_GAMEPLATFORMID (RETRO_SWITCH)
 #else
 #error Unspecified RETRO_GAMEPLATFORMID
 #endif
 
 #endif
 
-// Timeline:
-// 0 = S1 release RSDKv4 version
-// 1 = S2 release RSDKv4 version
-// 2 = S3 POC RSDKv4 version (I have no idea how we have this but woohoo apparently)
-#define RSDK_REVISION (2)
+// Determines which revision to use (see defines below for specifics). Datafiles from REV00 and REV01 builds will not work on later revisions and vice versa.
+#ifndef RSDK_REVISION
+#define RSDK_REVISION (3)
+#endif
 
-// reverts opcode list back to how it was in earliest S1 builds, fixes bugs on some datafiles
-// generally advised to keep this set to 0
+// Revision from early versions of Sonic 1
 #define RETRO_REV00 (RSDK_REVISION == 0)
 
-// reverts opcode list back to how it was in earliest S2 builds, fixes bugs on some datafiles
-// generally advised to keep this set to 0
-#define RETRO_REV01 (RSDK_REVISION == 1)
+// Revision from early versions of Sonic 2
+#define RETRO_REV01 (RSDK_REVISION >= 1)
 
-// the default, uses the S3 POC opcode list, which is the latest version of RSDKv4
-// generally advised to keep this set to 1
-#define RETRO_REV02 (RSDK_REVISION == 2)
+// Revision from the S3&K POC, this is also used in the Sega Forever versions of S1 & S2
+#define RETRO_REV02 (RSDK_REVISION >= 2)
+
+// Revision included as part of RSDKv5U (Sonic Origins)
+#define RETRO_REV03 (RSDK_REVISION >= 3)
 
 enum RetroLanguages {
     RETRO_EN = 0,
@@ -260,7 +271,6 @@ enum RetroStates {
     ENGINE_EXITPAUSE   = 6,
     ENGINE_ENDGAME     = 7,
     ENGINE_RESETGAME   = 8,
-    ENGINE_VIDEOWAIT   = 9,
 
 #if !RETRO_USE_ORIGINAL_CODE && RETRO_USE_NETWORKING
     // Custom GameModes (required to make some features work)
@@ -332,7 +342,6 @@ extern bool engineDebugMode;
 #include "Userdata.hpp"
 #include "Debug.hpp"
 #include "ModAPI.hpp"
-#include "Video.hpp"
 
 // Native Entities
 #include "NativeObjects.hpp"
@@ -357,6 +366,9 @@ public:
 #endif
     bool usingDataFile = false;
     bool usingBytecode = false;
+#if RETRO_REV03 && !RETRO_USE_ORIGINAL_CODE
+    bool usingOrigins = false;
+#endif
 
     char dataFile[RETRO_PACKFILE_COUNT][0x80];
 
@@ -418,6 +430,7 @@ public:
 
     bool LoadGameConfig(const char *filepath);
 #if RETRO_USE_MOD_LOADER
+    void LoadXMLWindowText();
     void LoadXMLVariables();
     void LoadXMLPalettes();
     void LoadXMLObjects();
@@ -428,8 +441,15 @@ public:
 
     char gameWindowText[0x40];
     char gameDescriptionText[0x100];
-    const char *gameVersion  = "v4";
+#ifdef DECOMP_VERSION
+    const char *gameVersion = DECOMP_VERSION;
+#else
+    const char *gameVersion  = "1.3.3";
+#endif
     const char *gamePlatform = nullptr;
+
+    int gameTypeID       = 0;
+    const char *releaseType = "USE_STANDALONE";
 
 #if RETRO_RENDERTYPE == RETRO_SW_RENDER
     const char *gameRenderType = "SW_RENDERING";
@@ -462,7 +482,7 @@ public:
 
     bool startFullScreen  = false; // if should start as fullscreen
     bool borderless       = false;
-    bool vsync            = true;
+    bool vsync            = false;
     int scalingMode       = 0;
     int windowScale       = 2;
     int refreshRate       = 60; // user-picked screen update rate
@@ -484,7 +504,6 @@ public:
 #if RETRO_SOFTWARE_RENDER
     SDL_Texture *screenBuffer   = nullptr;
     SDL_Texture *screenBuffer2x = nullptr;
-    SDL_Texture *videoBuffer = nullptr;
 #endif // RETRO_SOFTWARE_RENDERER
 #endif
 
@@ -500,7 +519,6 @@ public:
 
     SDL_Surface *screenBuffer   = nullptr;
     SDL_Surface *screenBuffer2x = nullptr;
-    SDL_Surface *videoBuffer = nullptr;
 
     SDL_Event sdlEvents;
 #endif // RETRO_USING_SDL1
